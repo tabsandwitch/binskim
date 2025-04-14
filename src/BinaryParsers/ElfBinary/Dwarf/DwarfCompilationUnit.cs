@@ -4,9 +4,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
-using System.Runtime.CompilerServices;
-using System.Text;
 
 namespace Microsoft.CodeAnalysis.BinaryParsers.Dwarf
 {
@@ -38,7 +35,7 @@ namespace Microsoft.CodeAnalysis.BinaryParsers.Dwarf
                                     DwarfMemoryReader debugDataDescription,
                                     DwarfMemoryReader debugStrings,
                                     DwarfMemoryReader debugLineStrings,
-                                    IList<int> debugStringOffsets,
+                                    DwarfMemoryReader debugStringOffsets,
                                     NormalizeAddressDelegate addressNormalizer)
         {
             ReadData(dwarfBinary,
@@ -78,7 +75,7 @@ namespace Microsoft.CodeAnalysis.BinaryParsers.Dwarf
                               DwarfMemoryReader debugDataDescription,
                               DwarfMemoryReader debugStrings,
                               DwarfMemoryReader debugLineStrings,
-                              IList<int> debugStringOffsets,
+                              DwarfMemoryReader debugStringOffsets,
                               NormalizeAddressDelegate addressNormalizer)
         {
             // Read header
@@ -209,7 +206,7 @@ namespace Microsoft.CodeAnalysis.BinaryParsers.Dwarf
 
                         case DwarfFormat.UData:
                             attributeValue.Type = DwarfAttributeValueType.Constant;
-                            attributeValue.Value = (ulong)debugData.ULEB128();
+                            attributeValue.Value = debugData.ULEB128();
                             break;
 
                         case DwarfFormat.String:
@@ -302,7 +299,15 @@ namespace Microsoft.CodeAnalysis.BinaryParsers.Dwarf
                             attributeValue.Value = (ulong)debugData.ReadOffset(is64bit);
                             if (attribute == DwarfAttribute.RankStrOffsetsBase)
                             {
-                                indexOffset = (int)((ulong)attributeValue.Value / (ulong)(is64bit ? 8 : 4));
+                                try
+                                {
+                                    indexOffset = Convert.ToInt32(attributeValue.Value);
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"Warning: Error calculating index offset: {ex.Message}");
+                                    indexOffset = -1;
+                                }
                             }
                             break;
 
@@ -387,7 +392,7 @@ namespace Microsoft.CodeAnalysis.BinaryParsers.Dwarf
                     }
                 }
 
-                if (indexOffset > -1)
+                if (indexOffset != -1)
                 {
                     foreach (DwarfAttributeValue dwarfAttributeValue in attributes.Values)
                     {
@@ -399,7 +404,8 @@ namespace Microsoft.CodeAnalysis.BinaryParsers.Dwarf
                         }
 
                         int debugStringOffsetIndex = Convert.ToInt32(dwarfAttributeValue.Value) + indexOffset;
-                        int offset = debugStringOffsets[debugStringOffsetIndex];
+                        debugStringOffsets.Position = debugStringOffsetIndex;
+                        int offset = debugStringOffsets.ReadOffset(is64bit);
                         dwarfAttributeValue.Value = debugStrings.ReadString(offset);
                     }
                 }
@@ -428,8 +434,6 @@ namespace Microsoft.CodeAnalysis.BinaryParsers.Dwarf
                     symbol.Children = new List<DwarfSymbol>();
                     parents.Push(symbol);
                 }
-
-                break;
             }
 
             SymbolsTree = symbols.ToArray();
@@ -529,6 +533,57 @@ namespace Microsoft.CodeAnalysis.BinaryParsers.Dwarf
             }
 
             return stringOffsets;
+        }
+
+        private bool TryGetInt32Value(object value, out int result, out string error)
+        {
+            result = 0;
+            error = null;
+
+            try
+            {
+                if (value == null)
+                {
+                    error = "Null value encountered";
+                    return false;
+                }
+
+                if (value is ulong ulongValue)
+                {
+                    if (ulongValue > int.MaxValue)
+                    {
+                        error = $"Value {ulongValue} is too large for Int32";
+                        return false;
+                    }
+                    result = (int)ulongValue;
+                    return true;
+                }
+
+                if (value is long longValue)
+                {
+                    if (longValue > int.MaxValue || longValue < int.MinValue)
+                    {
+                        error = $"Value {longValue} is outside Int32 range";
+                        return false;
+                    }
+                    result = (int)longValue;
+                    return true;
+                }
+
+                if (value is int intValue)
+                {
+                    result = intValue;
+                    return true;
+                }
+
+                error = $"Unexpected value type: {value.GetType()}";
+                return false;
+            }
+            catch (Exception ex)
+            {
+                error = $"Error converting value: {ex.Message}";
+                return false;
+            }
         }
 
         /// <summary>
